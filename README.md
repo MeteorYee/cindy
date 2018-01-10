@@ -39,5 +39,5 @@ Translation examples:<br>
 **nmt**:  For men were bound with fetters and chains , and chains were crushed by him ; and the fetters were shattered .
 
 * Current BLEU value is **16.3**.
-<br>
+
 In the future, a more accurate word segmentation tool is needed for Chinese sentences, add subword option, ...
