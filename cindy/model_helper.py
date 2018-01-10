@@ -4,7 +4,7 @@
 #
 # Created at: 12/30/2017
 #
-# Last Modified at: 12/31/2017, by: Synrey Yee
+# Last Modified at: 01/05/2018, by: Synrey Yee
 
 #######################<=Description=>##########################
 ###                                                          ###
@@ -40,18 +40,42 @@ import tensorflow as tf
 
 from tensorflow.python.ops import lookup_ops
 
-from . import attmodel
 from .third_party import iterator_utils
 from .third_party import misc_utils as utils
 from .third_party import vocab_utils
 
 
+__all__ = [
+    "get_initializer", "create_train_model", 
+    "create_eval_model", "create_infer_model",
+    "create_emb_for_encoder_and_decoder", "create_rnn_cell",
+    "gradient_clip", "create_or_load_model", "load_model", "compute_perplexity"
+]
+
+
+def get_initializer(init_op, seed=None, init_weight=None):
+  """Create an initializer. init_weight is only for uniform."""
+  if init_op == "uniform":
+    assert init_weight
+    return tf.random_uniform_initializer(
+        -init_weight, init_weight, seed=seed)
+  elif init_op == "glorot_normal":
+    return tf.keras.initializers.glorot_normal(
+        seed=seed)
+  elif init_op == "glorot_uniform":
+    return tf.keras.initializers.glorot_uniform(
+        seed=seed)
+  else:
+    raise ValueError("Unknown init_op %s" % init_op)
+
+
 class TrainModel(
-    collections.namedtuple("TrainModel", ("graph", "model", "iterator"))):
+    collections.namedtuple("TrainModel", ("graph", "model", "iterator",
+                                          "skip_count_placeholder"))):
   pass
 
 
-def create_train_model(hparams):
+def create_train_model(model_creator, hparams):
   """Create train graph, model, and iterator."""
   src_file = "%s.%s" % (hparams.train_prefix, hparams.src)
   tgt_file = "%s.%s" % (hparams.train_prefix, hparams.tgt)
@@ -79,7 +103,8 @@ def create_train_model(hparams):
         random_seed=hparams.random_seed,
         num_buckets=hparams.num_buckets,
         src_max_len=hparams.src_max_len,
-        tgt_max_len=hparams.tgt_max_len)
+        tgt_max_len=hparams.tgt_max_len,
+        skip_count=skip_count_placeholder)
 
     model = model_creator(
         hparams,
@@ -91,7 +116,8 @@ def create_train_model(hparams):
   return TrainModel(
       graph=graph,
       model=model,
-      iterator=iterator)
+      iterator=iterator,
+      skip_count_placeholder=skip_count_placeholder)
 
 
 class EvalModel(
@@ -101,7 +127,7 @@ class EvalModel(
   pass
 
 
-def create_eval_model(hparams):
+def create_eval_model(model_creator, hparams):
   """Create train graph, model, src/tgt file holders, and iterator."""
   src_vocab_file = hparams.src_vocab_file
   tgt_vocab_file = hparams.tgt_vocab_file
@@ -147,7 +173,7 @@ class InferModel(
   pass
 
 
-def create_infer_model(hparams):
+def create_infer_model(model_creator, hparams):
   """Create inference model."""
   graph = tf.Graph()
   src_vocab_file = hparams.src_vocab_file
@@ -256,7 +282,7 @@ def _cell_list(num_units, num_layers, forget_bias,
   for i in range(num_layers):
     utils.print_out("  cell %d" % i, new_line=False)
 
-    # dropout (= 1 - keep_prob) is set to 0 during eval and infer
+    # dropout = (1 - keep_prob) is set to 0 during eval and infer
     dropout = dropout if mode == tf.contrib.learn.ModeKeys.TRAIN else 0.0
 
     utils.print_out("  LSTM, forget_bias=%g" % forget_bias, new_line=False)
@@ -274,3 +300,68 @@ def _cell_list(num_units, num_layers, forget_bias,
     cell_list.append(single_cell)
 
   return cell_list
+
+def gradient_clip(gradients, max_gradient_norm):
+  """Clipping gradients of a model."""
+  clipped_gradients, gradient_norm = tf.clip_by_global_norm(
+      gradients, max_gradient_norm)
+  gradient_norm_summary = [tf.summary.scalar("grad_norm", gradient_norm)]
+  gradient_norm_summary.append(
+      tf.summary.scalar("clipped_gradient", tf.global_norm(clipped_gradients)))
+
+  return clipped_gradients, gradient_norm_summary, gradient_norm
+
+  
+def load_model(model, ckpt, session, name):
+  start_time = time.time()
+  model.saver.restore(session, ckpt)
+  session.run(tf.tables_initializer())
+  utils.print_out(
+      "  loaded %s model parameters from %s, time %.2fs" %
+      (name, ckpt, time.time() - start_time))
+  return model
+
+
+def create_or_load_model(model, model_dir, session, name):
+  """Create translation model and initialize or load parameters in session."""
+  latest_ckpt = tf.train.latest_checkpoint(model_dir)
+  if latest_ckpt:
+    model = load_model(model, latest_ckpt, session, name)
+  else:
+    start_time = time.time()
+    session.run(tf.global_variables_initializer())
+    session.run(tf.tables_initializer())
+    utils.print_out("  created %s model with fresh parameters, time %.2fs" %
+                    (name, time.time() - start_time))
+
+  global_step = model.global_step.eval(session=session)
+  return model, global_step
+
+
+def compute_perplexity(model, sess, name):
+  """Compute perplexity of the output of the model.
+
+  Args:
+    model: model for compute perplexity.
+    sess: tensorflow session to use.
+    name: name of the batch.
+
+  Returns:
+    The perplexity of the eval outputs.
+  """
+  total_loss = 0
+  total_predict_count = 0
+  start_time = time.time()
+
+  while True:
+    try:
+      loss, predict_count, batch_size = model.eval(sess)
+      total_loss += loss * batch_size
+      total_predict_count += predict_count
+    except tf.errors.OutOfRangeError:
+      break
+
+  perplexity = utils.safe_exp(total_loss / total_predict_count)
+  utils.print_time("  eval %s: perplexity %.2f" % (name, perplexity),
+                   start_time)
+  return perplexity

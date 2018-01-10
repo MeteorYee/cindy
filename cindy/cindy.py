@@ -41,7 +41,12 @@ import sys
 import numpy as np
 import tensorflow as tf
 
+from . import train
+from . import inference
+
 from .third_party import misc_utils as utils
+from .third_party import evaluation_utils
+from .third_party import vocab_utils
 
 utils.check_tensorflow_version()
 
@@ -64,7 +69,7 @@ def add_arguments(parser):
   parser.add_argument("--learning_rate", type=float, default=1.0,
                       help="Learning rate. Adam: 0.001 | 0.0001")
   parser.add_argument(
-      "--decay_scheme", type=str, default="", help="""\
+      "--decay_scheme", type=str, default="luong10", help="""\
       How we decay learning rate. Options include:
         luong234: after 2/3 num train steps, we start halving the learning rate
           for 4 times before finishing.
@@ -111,7 +116,7 @@ def add_arguments(parser):
                       """)
 
   # Sequence lengths
-  parser.add_argument("--src_max_len", type=int, default=80,
+  parser.add_argument("--src_max_len", type=int, default=50,
                       help="Max length of src sequences during training.")
   parser.add_argument("--tgt_max_len", type=int, default=50,
                       help="Max length of tgt sequences during training.")
@@ -150,9 +155,6 @@ def add_arguments(parser):
       based on data if None.\
       """)
 
-  parser.add_argument("--hparams_path", type=str, default=None,
-                      help=("Path to standard hparams json file that overrides"
-                            "hparams values from FLAGS."))
   parser.add_argument("--random_seed", type=int, default=None,
                       help="Random seed (>0, set a specific seed).")
 
@@ -236,6 +238,68 @@ def create_hparams(flags):
   )
 
 
+def extend_hparams(hparams):
+  """Extend training hparams."""
+  # Sanity checks
+  if hparams.num_layers % 2 != 0:
+    raise ValueError("For bi, num_layers %d should be even" %
+                     hparams.num_layers)
+
+  # Flags
+  utils.print_out("# hparams:")
+  utils.print_out("  src=%s" % hparams.src)
+  utils.print_out("  tgt=%s" % hparams.tgt)
+  utils.print_out("  train_prefix=%s" % hparams.train_prefix)
+  utils.print_out("  dev_prefix=%s" % hparams.dev_prefix)
+  utils.print_out("  test_prefix=%s" % hparams.test_prefix)
+  utils.print_out("  out_dir=%s" % hparams.out_dir)
+
+  ## Vocab
+  # Get vocab file names first
+  if hparams.vocab_prefix:
+    src_vocab_file = hparams.vocab_prefix + "." + hparams.src
+    tgt_vocab_file = hparams.vocab_prefix + "." + hparams.tgt
+  else:
+    raise ValueError("hparams.vocab_prefix must be provided.")
+
+  # Source vocab
+  src_vocab_size, src_vocab_file = vocab_utils.check_vocab(
+      src_vocab_file,
+      hparams.out_dir,
+      check_special_token=hparams.check_special_token,
+      sos=hparams.sos,
+      eos=hparams.eos,
+      unk=vocab_utils.UNK)
+
+  # Target vocab
+  tgt_vocab_size, tgt_vocab_file = vocab_utils.check_vocab(
+      tgt_vocab_file,
+      hparams.out_dir,
+      check_special_token=hparams.check_special_token,
+      sos=hparams.sos,
+      eos=hparams.eos,
+      unk=vocab_utils.UNK)
+
+  hparams.add_hparam("src_vocab_size", src_vocab_size)
+  hparams.add_hparam("tgt_vocab_size", tgt_vocab_size)
+  hparams.add_hparam("src_vocab_file", src_vocab_file)
+  hparams.add_hparam("tgt_vocab_file", tgt_vocab_file)
+
+  # Check out_dir
+  if not tf.gfile.Exists(hparams.out_dir):
+    utils.print_out("# Creating output directory %s ..." % hparams.out_dir)
+    tf.gfile.MakeDirs(hparams.out_dir)
+
+  # Evaluation
+  for metric in hparams.metrics:
+    hparams.add_hparam("best_" + metric, 0)  # larger is better
+    best_metric_dir = os.path.join(hparams.out_dir, "best_" + metric)
+    hparams.add_hparam("best_" + metric + "_dir", best_metric_dir)
+    tf.gfile.MakeDirs(best_metric_dir)
+
+  return hparams
+
+
 def run_main(flags, hparams, train_fn, inference_fn):
   """Run main."""
   # Random
@@ -249,6 +313,17 @@ def run_main(flags, hparams, train_fn, inference_fn):
   out_dir = flags.out_dir
   if not tf.gfile.Exists(out_dir): tf.gfile.MakeDirs(out_dir)
 
+  # Load hparams.
+  hparams = extend_hparams(hparams)
+
+  # Save HParams
+  utils.save_hparams(out_dir, hparams)
+  for metric in hparams.metrics:
+    utils.save_hparams(getattr(hparams, "best_" + metric + "_dir"), hparams)
+
+  # Print HParams
+  utils.print_hparams(hparams)
+
   if flags.inference_input_file:
     # Inference
     trans_file = flags.inference_output_file
@@ -258,7 +333,7 @@ def run_main(flags, hparams, train_fn, inference_fn):
 
     # inference_fn has no "job_id" parameter
     inference_fn(ckpt, flags.inference_input_file,
-                 trans_file, hparams, num_workers)
+                 trans_file, hparams)
 
     # Evaluation
     ref_file = flags.inference_ref_file
@@ -267,27 +342,17 @@ def run_main(flags, hparams, train_fn, inference_fn):
         score = evaluation_utils.evaluate(
             ref_file,
             trans_file,
-            metric,
-            hparams.subword_option)
+            metric)
         utils.print_out("  %s: %.1f" % (metric, score))
   else:
     # Train
     train_fn(hparams)
 
-def train_test(hparams):
-  print("Training is OK!")
-
-def infer_test(ckpt, inference_input_file,
-                 trans_file, hparams, num_workers):
-  print("Inference is OK!")
-
 
 def main(unused_argv):
   default_hparams = create_hparams(FLAGS)
-  # train_fn = train.train
-  # inference_fn = inference.inference
-  train_fn = train_test
-  inference_fn = infer_test
+  train_fn = train.train
+  inference_fn = inference.inference
   run_main(FLAGS, default_hparams, train_fn, inference_fn)
 
 

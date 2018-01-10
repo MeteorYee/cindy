@@ -10,7 +10,7 @@
 #              Output: Comes out from a fully connected layer which reads the
 #                      output from decoder
 #
-# Last Modified at: 01/01/2018, by: Synrey Yee
+# Last Modified at: 01/05/2018, by: Synrey Yee
 
 # Happy New Year!
 
@@ -89,7 +89,7 @@ class AttModel(object):
             hparams.tgt_vocab_size, use_bias=False, name="output_projection")
 
     ## Train graph
-    res = self.build_graph(hparams, scope=scope)
+    res = self.build_graph(hparams)
     # !!!!!!
 
     if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
@@ -116,23 +116,19 @@ class AttModel(object):
     # Arrage for the embedding vars to appear at the beginning.
     if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
       self.learning_rate = tf.constant(hparams.learning_rate)
-      # warm-up
-      self.learning_rate = self._get_learning_rate_warmup(hparams)
       # decay
       self.learning_rate = self._get_learning_rate_decay(hparams)
 
-      # Optimizer
-      if hparams.optimizer == "sgd":
-        opt = tf.train.GradientDescentOptimizer(self.learning_rate)
-        tf.summary.scalar("lr", self.learning_rate)
-      elif hparams.optimizer == "adam":
-        opt = tf.train.AdamOptimizer(self.learning_rate)
+      # Optimizer, SGD
+      opt = tf.train.GradientDescentOptimizer(self.learning_rate)
+      tf.summary.scalar("lr", self.learning_rate)
 
       # Gradients
       gradients = tf.gradients(
           self.train_loss,
           params,
-          colocate_gradients_with_ops=hparams.colocate_gradients_with_ops)
+          colocate_gradients_with_ops=True)
+          # To place the gradients on the same device as the original (forward-pass) op
 
       clipped_grads, grad_norm_summary, grad_norm = model_helper.gradient_clip(
           gradients, max_gradient_norm=hparams.max_gradient_norm)
@@ -235,7 +231,7 @@ class AttModel(object):
     return encoder_outputs, encoder_state
 
   def _build_bidirectional_rnn(self, inputs, sequence_length,
-                               dtype, hparams, num_bi_layers
+                               dtype, hparams, num_bi_layers,
                                base_gpu = 0):
     # Construct forward and backward cells
     fw_cell = self._build_encoder_cell(hparams,
@@ -256,16 +252,14 @@ class AttModel(object):
     return tf.concat(bi_outputs, -1), bi_state
 
 
-  def _build_encoder_cell(self, hparams, num_layers, num_residual_layers,
-                          base_gpu=0):
+  def _build_encoder_cell(self, hparams, num_layers, base_gpu=0):
     """Build a multi-layer RNN cell that can be used by encoder."""
 
     return model_helper.create_rnn_cell(
-        unit_type=hparams.unit_type,
         num_units=hparams.num_units,
         num_layers=num_layers,
         forget_bias=hparams.forget_bias,
-        dropout=hparams.dropout,,
+        dropout=hparams.dropout,
         mode=self.mode,
         base_gpu=base_gpu)
 
@@ -430,13 +424,128 @@ class AttModel(object):
         cell,
         attention_mechanism,
         attention_layer_size=num_units,
-        output_attention=hparams.output_attention,
+        output_attention=True,
         name="attention")
 
-    if hparams.pass_hidden_state:
-      decoder_initial_state = cell.zero_state(batch_size, dtype).clone(
+    # pass encoder's hidden state to decoder when using an attention based model.
+    decoder_initial_state = cell.zero_state(batch_size, dtype).clone(
           cell_state=encoder_state)
-    else:
-      decoder_initial_state = cell.zero_state(batch_size, dtype)
 
     return cell, decoder_initial_state
+
+  def get_max_time(self, tensor):
+    time_axis = 0 if self.time_major else 1
+    return tensor.shape[time_axis].value or tf.shape(tensor)[time_axis]
+
+  def _compute_loss(self, logits):
+    """Compute optimization loss."""
+    target_output = self.iterator.target_output
+    if self.time_major:
+      target_output = tf.transpose(target_output)
+    max_time = self.get_max_time(target_output)
+    crossent = tf.nn.sparse_softmax_cross_entropy_with_logits(
+        labels=target_output, logits=logits)
+    target_weights = tf.sequence_mask(
+        self.iterator.target_sequence_length, max_time, dtype=logits.dtype)
+    if self.time_major:
+      target_weights = tf.transpose(target_weights)
+
+    loss = tf.reduce_sum(
+        crossent * target_weights) / tf.to_float(self.batch_size)
+    return loss
+
+  def _get_learning_rate_decay(self, hparams):
+    """Get learning rate decay."""
+    if hparams.decay_scheme == "luong10":
+      start_decay_step = int(hparams.num_train_steps / 2)
+      remain_steps = hparams.num_train_steps - start_decay_step
+      decay_steps = int(remain_steps / 10)  # decay 10 times
+      decay_factor = 0.5
+    elif hparams.decay_scheme == "luong234":
+      start_decay_step = int(hparams.num_train_steps * 2 / 3)
+      remain_steps = hparams.num_train_steps - start_decay_step
+      decay_steps = int(remain_steps / 4)  # decay 4 times
+      decay_factor = 0.5
+    elif not hparams.decay_scheme:  # no decay
+      start_decay_step = hparams.num_train_steps
+      decay_steps = 0
+      decay_factor = 1.0
+    elif hparams.decay_scheme:
+      raise ValueError("Unknown decay scheme %s" % hparams.decay_scheme)
+    utils.print_out("  decay_scheme=%s, start_decay_step=%d, decay_steps %d, "
+                    "decay_factor %g" % (hparams.decay_scheme,
+                                         start_decay_step,
+                                         decay_steps,
+                                         decay_factor))
+
+    return tf.cond(
+        self.global_step < start_decay_step,
+        lambda: self.learning_rate,
+        lambda: tf.train.exponential_decay(
+            self.learning_rate,
+            (self.global_step - start_decay_step),
+            decay_steps, decay_factor, staircase=True),
+        name="learning_rate_decay_cond")
+
+  def _get_infer_summary(self, hparams):
+    if hparams.beam_width > 0:
+      return tf.no_op()
+    return _create_attention_images_summary(self.final_context_state)
+
+
+  def train(self, sess):
+    assert self.mode == tf.contrib.learn.ModeKeys.TRAIN
+    return sess.run([self.update,
+                     self.train_loss,
+                     self.predict_count,
+                     self.train_summary,
+                     self.global_step,
+                     self.word_count,
+                     self.batch_size,
+                     self.grad_norm,
+                     self.learning_rate])
+
+  def eval(self, sess):
+    assert self.mode == tf.contrib.learn.ModeKeys.EVAL
+    return sess.run([self.eval_loss,
+                     self.predict_count,
+                     self.batch_size])
+
+  def infer(self, sess):
+    assert self.mode == tf.contrib.learn.ModeKeys.INFER
+    return sess.run([
+        self.infer_logits, self.infer_summary, self.sample_id, self.sample_words
+    ])
+
+  def decode(self, sess):
+    """Decode a batch.
+
+    Args:
+      sess: tensorflow session to use.
+
+    Returns:
+      A tuple consiting of outputs, infer_summary.
+        outputs: of size [batch_size, time]
+    """
+    _, infer_summary, _, sample_words = self.infer(sess)
+
+    # make sure outputs is of shape [batch_size, time] or [beam_width,
+    # batch_size, time] when using beam search.
+    if self.time_major:
+      sample_words = sample_words.transpose()
+    elif sample_words.ndim == 3:  # beam search output in [batch_size,
+                                  # time, beam_width] shape.
+      sample_words = sample_words.transpose([2, 0, 1])
+    return sample_words, infer_summary
+
+
+def _create_attention_images_summary(final_context_state):
+  """create attention image and attention summary."""
+  attention_images = (final_context_state.alignment_history.stack())
+  # Reshape to (batch, src_seq_len, tgt_seq_len,1)
+  attention_images = tf.expand_dims(
+      tf.transpose(attention_images, [1, 2, 0]), -1)
+  # Scale to range [0, 255]
+  attention_images *= 255
+  attention_summary = tf.summary.image("attention_images", attention_images)
+  return attention_summary

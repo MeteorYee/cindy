@@ -121,7 +121,9 @@ def main(args):
   num_sents = CorpusCheck(src_raw, tgt_raw)
   num_eval = num_sents * args.percentage
   num_test = num_sents * args.percentage
-  step = num_sents / (num_eval + num_test)
+  step = int(num_sents / (num_eval + num_test))
+
+  print ("step = %d" % step)
 
   src_args = (src_raw, src_vob_path, src_vob_dict_path, src_train,
           src_eval, src_test, step, args.src_freq)
@@ -154,32 +156,32 @@ if __name__ == '__main__':
   parser.add_argument(
     "--vob_path",
     type = str,
-    default = "/home/synrey/data/Snmt/vocab",
+    default = "/home/synrey/data/Snmt_word/vocab",
     help = "vector's file prefix")
   parser.add_argument(
     "--vob_dict_path",
     type = str,
-    default = "/home/synrey/data/Snmt/vob_dict",
+    default = "/home/synrey/data/Snmt_word/vob_dict",
     help = "vector's python dict prefix, dumped by pickle")
 
   parser.add_argument(
     "--train_file",
     type = str,
-    default = "/home/synrey/data/Snmt/train",
+    default = "/home/synrey/data/Snmt_word/train",
     help = "training file prefix")
 
   # output, eval file
   parser.add_argument(
     "--eval_file",
     type = str,
-    default = "/home/synrey/data/Snmt/eval",
+    default = "/home/synrey/data/Snmt_word/eval",
     help = "eval file prefix")
 
   # output, test file
   parser.add_argument(
     "--test_file",
     type = str,
-    default = "/home/synrey/data/Snmt/test",
+    default = "/home/synrey/data/Snmt_word/test",
     help = "test file prefix")
 
   # parameters
@@ -196,18 +198,18 @@ if __name__ == '__main__':
   parser.add_argument(
     "--src_freq",
     type = int,
-    default = 2,
+    default = 10,
     help = "source file word frequency")
   parser.add_argument(
     "--tgt_freq",
     type = int,
-    default = 9,
+    default = 10,
     help = "target file word frequency")
 
   parser.add_argument(
     "--percentage",
     type = float,
-    default = 0.01,
+    default = 0.0015,
     help = "the eval or test file percentage with respect to original corpora")
 
   args = parser.parse_args()

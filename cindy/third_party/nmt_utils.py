@@ -82,7 +82,7 @@ def decode_and_evaluate(name,
           ref_file,
           trans_file,
           metric,
-          subword_option=subword_option)
+          subword_option=None)
       evaluation_scores[metric] = score
       utils.print_out("  %s %s: %.1f" % (metric, name, score))
 
