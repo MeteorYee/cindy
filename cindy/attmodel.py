@@ -10,7 +10,7 @@
 #              Output: Comes out from a fully connected layer which reads the
 #                      output from decoder
 #
-# Last Modified at: 01/05/2018, by: Synrey Yee
+# Last Modified at: 10/25/2018, by: Sylvan Yee (Synrey Yee)
 
 # Happy New Year!
 
@@ -50,6 +50,7 @@ from . import model_helper
 from .third_party import iterator_utils
 from .third_party import misc_utils as utils
 
+
 utils.check_tensorflow_version()
 
 class AttModel(object):
@@ -88,9 +89,12 @@ class AttModel(object):
         self.output_layer = layers_core.Dense(
             hparams.tgt_vocab_size, use_bias=False, name="output_projection")
 
+    if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
+      if hparams.stop_words_file != None:
+        self._scaling_weights = model_helper.get_scaling_weights(hparams)
+
     ## Train graph
     res = self.build_graph(hparams)
-    # !!!!!!
 
     if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
       self.train_loss = res[1]
@@ -190,6 +194,11 @@ class AttModel(object):
       ## Decoder
       logits, sample_id, final_context_state = self._build_decoder(
           encoder_outputs, encoder_state, hparams)
+
+      if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
+        if hparams.stop_words_file != None:
+          # scale the loss based on the stop words
+          logits = self._scaling_weights * logits
 
       ## Loss
       if self.mode != tf.contrib.learn.ModeKeys.INFER:

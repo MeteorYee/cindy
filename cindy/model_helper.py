@@ -49,7 +49,8 @@ __all__ = [
     "get_initializer", "create_train_model", 
     "create_eval_model", "create_infer_model",
     "create_emb_for_encoder_and_decoder", "create_rnn_cell",
-    "gradient_clip", "create_or_load_model", "load_model", "compute_perplexity"
+    "gradient_clip", "create_or_load_model", "load_model",
+    "compute_perplexity", "get_scaling_weights"
 ]
 
 
@@ -365,3 +366,39 @@ def compute_perplexity(model, sess, name):
   utils.print_time("  eval %s: perplexity %.2f" % (name, perplexity),
                    start_time)
   return perplexity
+
+
+def get_scaling_weights(hparams):
+  tgt_vocab_file = hparams.tgt_vocab_file
+  tgt_vocab_size = hparams.tgt_vocab_size
+  stop_words_file = hparams.stop_words_file
+
+  stop_set = set([])
+  print("Try to use the stop words in:", stop_words_file)
+  with open(stop_words_file, 'r') as fin:
+    for words in fin:
+      for wd in words.strip().split(','):
+        stop_set.add(wd)
+  # add the comma
+  stop_set.add(',')
+  print("We have %d stop words." % len(stop_set))
+
+  weights_list = []
+  cnt = 0
+  with open(tgt_vocab_file, 'r') as fin:
+    for word in fin:
+      word = word.strip()
+      if word in stop_set:
+        weights_list.append(0.5)
+        cnt += 1
+      else:
+        weights_list.append(1.0)
+
+  print("Got %d stop words in %s" % (cnt, tgt_vocab_file))
+  assert len(weights_list) == tgt_vocab_size
+
+  weights_value = np.array(weights_list).reshape(1, tgt_vocab_size)
+  scaling_weights = tf.Variable(initial_value = weights_value,
+    trainable = False, name = "scalding_weights", dtype = tf.float32)
+
+  return scaling_weights

@@ -105,6 +105,9 @@ def add_arguments(parser):
   parser.add_argument("--vocab_prefix", type=str, default=None, help="""\
       Vocab prefix, expect files with src/tgt suffixes.\
       """)
+  parser.add_argument("--stop_words_file", type=str, default=None, help="""\
+      stop words for the target vocab ,which should be a csv file\
+      """)
   parser.add_argument("--sos", type=str, default="<s>",
                       help="Start-of-sentence symbol.")
   parser.add_argument("--eos", type=str, default="</s>",
@@ -225,6 +228,7 @@ def create_hparams(flags):
       sos=flags.sos if flags.sos else vocab_utils.SOS,
       eos=flags.eos if flags.eos else vocab_utils.EOS,
       check_special_token=flags.check_special_token,
+      stop_words_file=flags.stop_words_file,
 
       # Misc
       forget_bias=flags.forget_bias,
