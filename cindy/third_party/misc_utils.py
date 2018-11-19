@@ -29,9 +29,11 @@ import tensorflow as tf
 
 
 def check_tensorflow_version():
-  min_tf_version = "1.4.0-dev20171024"
-  if tf.__version__ < min_tf_version:
-    raise EnvironmentError("Tensorflow version must >= %s" % min_tf_version)
+  # min_tf_version = "1.4.0-dev20171024"
+  # if tf.__version__ < min_tf_version:
+  #   raise EnvironmentError("Tensorflow version must >= %s" % min_tf_version)
+  # no need to check
+  return True
 
 
 def safe_exp(value):
