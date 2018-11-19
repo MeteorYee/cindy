@@ -86,6 +86,7 @@ def create_train_model(model_creator, hparams):
   graph = tf.Graph()
 
   with graph.as_default(), tf.container("train"):
+    tf.set_random_seed(1234)
     src_vocab_table, tgt_vocab_table = vocab_utils.create_vocab_tables(
         src_vocab_file, tgt_vocab_file, share_vocab = None)
 
@@ -135,6 +136,7 @@ def create_eval_model(model_creator, hparams):
   graph = tf.Graph()
 
   with graph.as_default(), tf.container("eval"):
+    tf.set_random_seed(1234)
     src_vocab_table, tgt_vocab_table = vocab_utils.create_vocab_tables(
         src_vocab_file, tgt_vocab_file, share_vocab = None)
     src_file_placeholder = tf.placeholder(shape=(), dtype=tf.string)
@@ -181,6 +183,7 @@ def create_infer_model(model_creator, hparams):
   tgt_vocab_file = hparams.tgt_vocab_file
 
   with graph.as_default(), tf.container("infer"):
+    tf.set_random_seed(1234)
     src_vocab_table, tgt_vocab_table = vocab_utils.create_vocab_tables(
         src_vocab_file, tgt_vocab_file, share_vocab = None)
     reverse_tgt_vocab_table = lookup_ops.index_to_string_table_from_file(
@@ -372,6 +375,7 @@ def get_scaling_weights(hparams):
   tgt_vocab_file = hparams.tgt_vocab_file
   tgt_vocab_size = hparams.tgt_vocab_size
   stop_words_file = hparams.stop_words_file
+  scaling_factor = hparams.scaling_factor
 
   stop_set = set([])
   print("Try to use the stop words in:", stop_words_file)
@@ -389,10 +393,10 @@ def get_scaling_weights(hparams):
     for word in fin:
       word = word.strip()
       if word in stop_set:
-        weights_list.append(0.5)
+        weights_list.append(1.0)
         cnt += 1
       else:
-        weights_list.append(1.0)
+        weights_list.append(scaling_factor)
 
   print("Got %d stop words in %s" % (cnt, tgt_vocab_file))
   assert len(weights_list) == tgt_vocab_size

@@ -108,6 +108,9 @@ def add_arguments(parser):
   parser.add_argument("--stop_words_file", type=str, default=None, help="""\
       stop words for the target vocab ,which should be a csv file\
       """)
+  parser.add_argument("--scaling_factor", type=float, default=1.0, help="""\
+      the scaling factor for the probabilities before cross entropy
+      """)
   parser.add_argument("--sos", type=str, default="<s>",
                       help="Start-of-sentence symbol.")
   parser.add_argument("--eos", type=str, default="</s>",
@@ -158,7 +161,7 @@ def add_arguments(parser):
       based on data if None.\
       """)
 
-  parser.add_argument("--random_seed", type=int, default=None,
+  parser.add_argument("--random_seed", type=int, default=1234,
                       help="Random seed (>0, set a specific seed).")
 
   # Inference
@@ -229,6 +232,7 @@ def create_hparams(flags):
       eos=flags.eos if flags.eos else vocab_utils.EOS,
       check_special_token=flags.check_special_token,
       stop_words_file=flags.stop_words_file,
+      scaling_factor=flags.scaling_factor,
 
       # Misc
       forget_bias=flags.forget_bias,

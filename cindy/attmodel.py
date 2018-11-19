@@ -195,13 +195,16 @@ class AttModel(object):
       logits, sample_id, final_context_state = self._build_decoder(
           encoder_outputs, encoder_state, hparams)
 
-      if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
-        if hparams.stop_words_file != None:
-          # scale the loss based on the stop words
-          logits = self._scaling_weights * logits
+      # if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
+      #   if hparams.stop_words_file != None:
+      #     # scale the loss based on the stop words
+      #     logits = self._scaling_weights * logits
 
       ## Loss
-      if self.mode != tf.contrib.learn.ModeKeys.INFER:
+      if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
+        loss = self._compute_scaled_loss(logits, hparams.stop_words_file)
+        # loss = self._compute_loss(logits)
+      elif self.mode == tf.contrib.learn.ModeKeys.EVAL:
         loss = self._compute_loss(logits)
       else:
         loss = None
@@ -454,6 +457,44 @@ class AttModel(object):
     max_time = self.get_max_time(target_output)
     crossent = tf.nn.sparse_softmax_cross_entropy_with_logits(
         labels=target_output, logits=logits)
+
+    target_weights = tf.sequence_mask(
+        self.iterator.target_sequence_length, max_time, dtype=logits.dtype)
+    if self.time_major:
+      target_weights = tf.transpose(target_weights)
+
+    loss = tf.reduce_sum(
+        crossent * target_weights) / tf.to_float(self.batch_size)
+    return loss
+
+  def _compute_scaled_loss(self, logits, stop_words_file):
+    """Compute optimization scaled loss for training."""
+    if stop_words_file == None:
+      return self._compute_loss(logits)
+        # scale the loss based on the stop words
+        # logits = self._scaling_weights * logits
+
+    target_output = self.iterator.target_output
+    if self.time_major:
+      target_output = tf.transpose(target_output)
+    max_time = self.get_max_time(target_output)
+
+    # This is not working
+    # # get one-hot output
+    # one_hot_y = tf.one_hot(indices = target_output, depth = self.tgt_vocab_size, axis = -1)
+    # # do the scaling here!!!
+    # log_probs = tf.log(tf.nn.softmax(logits))
+    # crossent = -tf.reduce_sum(one_hot_y * log_probs, axis = -1)
+    crossent = tf.nn.sparse_softmax_cross_entropy_with_logits(
+        labels=target_output, logits=logits)
+
+    fshape = (self.batch_size, max_time)
+    if self.time_major:
+      fshape = (max_time, self.batch_size)
+    # add random scaling factors
+    factors = tf.random_uniform(shape = fshape, minval = 0, maxval = 2)
+    crossent = crossent - tf.log(factors)
+
     target_weights = tf.sequence_mask(
         self.iterator.target_sequence_length, max_time, dtype=logits.dtype)
     if self.time_major:
