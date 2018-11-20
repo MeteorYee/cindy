@@ -387,11 +387,13 @@ def get_scaling_weights(hparams):
   stop_set.add(',')
   print("We have %d stop words." % len(stop_set))
 
+  ind_list = []
   weights_list = []
   cnt = 0
   with open(tgt_vocab_file, 'r') as fin:
-    for word in fin:
+    for ind, word in enumerate(fin):
       word = word.strip()
+      ind_list.append(ind)
       if word in stop_set:
         weights_list.append(1.0)
         cnt += 1
@@ -401,8 +403,18 @@ def get_scaling_weights(hparams):
   print("Got %d stop words in %s" % (cnt, tgt_vocab_file))
   assert len(weights_list) == tgt_vocab_size
 
-  weights_value = np.array(weights_list).reshape(1, tgt_vocab_size)
+  ind_key = np.array(ind_list)
+  weights_value = np.array(weights_list)
+  keys = tf.constant(ind_key,  dtype = tf.int64, name = "scaling_keys")
+  values = tf.constant(weights_value,  dtype = tf.float32, name = "scaling_values")
+  default_value = tf.constant(np.array(1.0),  dtype = tf.float32, name = "scaling_default_value")
+
+  scaling_table = tf.contrib.lookup.HashTable(
+        tf.contrib.lookup.KeyValueTensorInitializer(keys, values),
+        default_value, name = "scaling_table")
+
+  weights_value = weights_value.reshape(1, tgt_vocab_size)
   scaling_weights = tf.Variable(initial_value = weights_value,
     trainable = False, name = "scalding_weights", dtype = tf.float32)
 
-  return scaling_weights
+  return scaling_weights, scaling_table

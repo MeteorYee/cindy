@@ -91,7 +91,7 @@ class AttModel(object):
 
     if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
       if hparams.stop_words_file != None:
-        self._scaling_weights = model_helper.get_scaling_weights(hparams)
+        self._scaling_weights, self._scaling_table = model_helper.get_scaling_weights(hparams)
 
     ## Train graph
     res = self.build_graph(hparams)
@@ -488,11 +488,8 @@ class AttModel(object):
     crossent = tf.nn.sparse_softmax_cross_entropy_with_logits(
         labels=target_output, logits=logits)
 
-    fshape = (self.batch_size, max_time)
-    if self.time_major:
-      fshape = (max_time, self.batch_size)
     # add random scaling factors
-    factors = tf.random_uniform(shape = fshape, minval = 0, maxval = 2)
+    factors = self._scaling_table.lookup(target_output)
     crossent = crossent - tf.log(factors)
 
     target_weights = tf.sequence_mask(
